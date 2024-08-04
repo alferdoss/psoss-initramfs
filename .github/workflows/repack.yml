@@ -13,13 +13,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Repack initramfs
-        run: |
-          cd src
-          find . | cpio -o -H newc | gzip -9 > ../initramfs.cpio.gz
+        run: make
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: initramfs
-          path: initramfs.cpio.gz
+          path: build/initramfs.cpio.gz
           retention-days: 5
