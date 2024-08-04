@@ -1,0 +1,25 @@
+name: Repack initramfs
+
+on:
+  push:
+    paths:
+      - "src/**"
+
+jobs:
+  repack:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Repack initramfs
+        run: |
+          cd src
+          find . | cpio -o -H newc | gzip -9 > ../initramfs.cpio.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: initramfs
+          path: initramfs.cpio.gz
+          retention-days: 5
