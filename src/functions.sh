@@ -4,7 +4,7 @@
 # Copyright (c) 2010-2013, Piotr Karbowski <piotr.karbowski@gmail.com>
 # All rights reserved.
 #
-# Redistribution and use in source and binary forms, with or without 
+# Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #    * Redistributions of source code must retain the above copyright notice,
 #      this list of conditions and the following disclaimer.
@@ -91,7 +91,7 @@ run_hooks() {
 }
 
 resolve_device() {
-	# This function will check if variable at $1 contain LABEL or UUID and then, if LABEL/UUID is vaild.	
+	# This function will check if variable at $1 contain LABEL or UUID and then, if LABEL/UUID is vaild.
 	device="$(eval echo \$$1)"
 	case "${device}" in
 		LABEL\=*|UUID\=*)
@@ -146,11 +146,11 @@ process_commandline_options() {
 			rootfstype\=*)
 				rootfstype=$(get_opt $i)
 			;;
-	
+
 			rootflags\=*)
 				rootfsmountparams="-o $(get_opt $i)"
 			;;
-	
+
 			ro|rw)
 				root_rw_ro=$i
 			;;
@@ -162,18 +162,6 @@ process_commandline_options() {
 			;;
 			sshd_port\=*)
 				sshd_port=$(get_opt $i)
-			;;
-			sshd_interface\=*)
-				# deprecated
-				sshd_interface=$(get_opt $i)
-			;;
-			sshd_ipv4\=*)
-				# deprecated
-				sshd_ipv4=$(get_opt $i)
-			;;
-			sshd_ipv4_gateway\=*)
-				# deprecated
-				sshd_ipv4_gateway=$(get_opt $i)
 			;;
 			binit_net_if\=*)
 				binit_net_if=$(get_opt $i)
@@ -266,7 +254,7 @@ InitializeLUKS() {
 	fi
 
 	musthave enc_root
-	
+
 	local enc_num='1'
 	local dev_name="enc_root"
 	# We will use : to separate devices but we need normal IFS inside the for loop anyway.
@@ -380,15 +368,6 @@ register_bcache_devices() {
 SetupNetwork() {
 	# Defaults ...
 	vlan='false'
-
-	# backward compatibility
-	if [ "${sshd_interface}" ]; then
-		ewarn "sshd_interface is deprecated, check README"
-		ewarn "and switch to binit_net_if!"
-		binit_net_if="${sshd_interface}"
-		binit_net_addr="${sshd_ipv4}"
-		binit_net_gw="${sshd_ipv4_gateway}"
-	fi
 
 	# setting _interface is the trigger.
 	# after dropping backward compatibility there should be
@@ -517,10 +496,10 @@ emount() {
 			'/newroot')
 				if mountpoint -q '/newroot'; then
 					einfo "/newroot already mounted, skipping..."
-				else	
+				else
 					einfo "Mounting /newroot..."
 					musthave root
-					if [ -n "${rootfstype}" ]; then 
+					if [ -n "${rootfstype}" ]; then
 						local mountparams="${rootfsmountparams} -t ${rootfstype}"
 					fi
 					resolve_device root
@@ -546,7 +525,7 @@ emount() {
 					ewarn "Early mouting of /usr will not be done."
 				fi
 			;;
-	
+
 			'/dev')
 				local devmountopts='nosuid,relatime,size=10240k,mode=755'
 
@@ -559,7 +538,7 @@ emount() {
 					run touch /etc/mdev.conf
 					run echo /sbin/mdev > /proc/sys/kernel/hotplug
 					run mdev -s
-					# Looks like mdev create /dev/pktcdvd as a file when both udev and devtmpfs do it as a dir. 
+					# Looks like mdev create /dev/pktcdvd as a file when both udev and devtmpfs do it as a dir.
 					# We will do it 'better' to avoid non-fatal-error while starting udev after switching to /newroot.
 					# TODO: Can mdev.conf handle it?
 					if [ -c '/dev/pktcdvd' ]; then
@@ -598,7 +577,7 @@ eumount() {
 		esac
 		shift
 	done
-}	
+}
 
 moveDev() {
 	einfo "Moving /dev to /newroot/dev..."
