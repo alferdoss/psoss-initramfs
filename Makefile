@@ -16,7 +16,7 @@ all: $(OUTPUT)
 # Create initramfs
 $(OUTPUT): $(SRC_DIR)
 	mkdir -p $(BUILD_DIR)
-	cd $(SRC_DIR) && find . | cpio -o -H newc | gzip -9 > ../$(OUTPUT)
+	cd $(SRC_DIR) && find . | cpio --owner=0:0 -o -H newc | gzip -9 > ../$(OUTPUT)
 	@echo "Created $(OUTPUT)"
 
 # Clean up
