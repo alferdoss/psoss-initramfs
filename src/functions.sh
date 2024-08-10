@@ -1,10 +1,10 @@
 #!/bin/sh
 # better-initramfs project
 # https://bitbucket.org/piotrkarbowski/better-initramfs
-# Copyright (c) 2010-2013, Piotr Karbowski <piotr.karbowski@gmail.com>
+# Copyright (c) 2010-2018, Piotr Karbowski <piotr.karbowski@gmail.com>
 # All rights reserved.
 #
-# Redistribution and use in source and binary forms, with or without
+# Redistribution and use in source and binary forms, with or without 
 # modification, are permitted provided that the following conditions are met:
 #    * Redistributions of source code must retain the above copyright notice,
 #      this list of conditions and the following disclaimer.
@@ -39,6 +39,10 @@ InitializeBusybox() {
 }
 
 rescueshell() {
+	if [ "${console}" ]; then
+		console="${console%,*}"
+	fi
+
 	if [ "$rescueshell" != 'true' ]; then
 		# If we did not forced rescueshell by kernel opt, print additional message.
 		ewarn "Dropping to rescueshell because of above error."
@@ -49,6 +53,8 @@ rescueshell() {
 	ewarn "If you wish resume booting process, run 'resume-boot'."
 	if [ "$console" ] && [ -c "/dev/${console}" ]; then
 		setsid sh -c "exec sh --login </dev/"${console}" >/dev/${console} 2>&1"
+	elif command -v cttyhack 1>/dev/null 2>&1; then
+		setsid cttyhack sh --login
 	elif [ -c '/dev/tty1' ]; then
 		setsid sh -c 'exec sh --login </dev/tty1 >/dev/tty1 2>&1'
 	else
@@ -64,18 +70,26 @@ was_shell() {
 }
 
 run() {
-	if "$@"; then
-		echo "Executed: '$@'" >> /init.log
+	if [ "$1" = "--non-zero-ok" ]; then
+		non_zero_ok="true"
+		shift
 	else
+		non_zero_ok="false"
+	fi
+
+	"$@"
+	return_code="$?"
+
+	echo "Executed: '$@'" >> /init.log
+
+	if [ "${return_code}" != "0" ] && [ "${non_zero_ok}" != "true" ]; then
 		eerror "'$@' failed."
 		echo "Failed: '$@'" >> /init.log
 		echo "$@" >> /.ash_history
 		rescueshell
 	fi
-}
 
-get_opt() {
-	echo "${*#*=}"
+	return "${return_code}"
 }
 
 run_hooks() {
@@ -90,13 +104,46 @@ run_hooks() {
 	fi
 }
 
+populate_dev_disk_by_label_and_uuid() {
+	# Create /dev/disk/by-{uuid,label} symlinks.
+	# We could run it with mdev as a trigger on event,
+	# but binit uses devtmpfs by default.
+
+	# It is possible that later whatever manages /dev
+	# will not probe block device and create symlinks,
+	# so we should do it before we move /dev to /newroot/dev
+
+	# Fix for an issue reported under Gentoo's bug #559026.
+
+	local block_device blkid_output LABEL UUID TYPE
+	local vars
+
+	einfo "Populating /dev/disk/by-{uuid,label} ..."
+
+	dodir /dev/disk /dev/disk/by-uuid /dev/disk/by-label
+
+	for block_device in /sys/class/block/*; do
+		unset blkid_output LABEL UUID TYPE
+
+		block_device="${block_device##*/}"
+
+		blkid_output="$(blkid "/dev/${block_device}")"
+		[ "${blkid_output}" ] || continue
+		vars="${blkid_output#*:}"
+		eval "${vars}"
+
+		[ "${LABEL}" ] && ! [ -e "/dev/disk/by-label/${LABEL}" ] && run ln -s "../../${block_device}" "/dev/disk/by-label/${LABEL}"
+		[ "${UUID}" ] && ! [ -e "/dev/disk/by-uuid/${UUID}" ] && run ln -s "../../${block_device}" "/dev/disk/by-uuid/${UUID}"
+	done
+}
+
 resolve_device() {
-	# This function will check if variable at $1 contain LABEL or UUID and then, if LABEL/UUID is vaild.
-	device="$(eval echo \$$1)"
+	# This function will check if variable at $1 contain LABEL or UUID and then, if LABEL/UUID is valid.
+	eval "device=\"\$$1\""
 	case "${device}" in
 		LABEL\=*|UUID\=*)
-			eval $1="$(findfs $device)"
-			if [ -z "$(eval echo \$$1)" ]; then
+			eval "$1=\"$(findfs $device)\""
+			if eval "[ -z \"\$$1\" ]"; then
 				eerror "Wrong UUID or LABEL."
 				rescueshell
 			fi
@@ -110,90 +157,39 @@ process_commandline_options() {
 			initramfsdebug)
 				set -x
 			;;
-			root\=*)
-				root=$(get_opt $i)
-			;;
-			init\=*)
-				init=$(get_opt $i)
-			;;
-			enc_root\=*)
-				enc_root=$(get_opt $i)
-			;;
-			luks)
-				luks=true
-			;;
-			lvm)
-				lvm=true
-			;;
-			softraid)
-				softraid=true
-			;;
-			rescueshell)
-				rescueshell=true
-			;;
-			swsusp)
-				swsusp=true
-			;;
-			uswsusp)
-				uswsusp=true
-			;;
-			tuxonice)
-				tuxonice=true
-			;;
-			resume\=*)
-				resume=$(get_opt $i)
-			;;
-			rootfstype\=*)
-				rootfstype=$(get_opt $i)
-			;;
-
-			rootflags\=*)
-				rootfsmountparams="-o $(get_opt $i)"
-			;;
-
 			ro|rw)
 				root_rw_ro=$i
 			;;
-			sshd)
-				sshd=true
+			binit_net_route\=*)
+				# support multiple binit_net_route=.
+				binit_net_routes="${binit_net_routes} ${i#*=}"
 			;;
-			sshd_wait\=*)
-				sshd_wait=$(get_opt $i)
+			*=*)
+				# Catch-all for foo=bar.
+				# And ignore foo.bar=1 etc.
+				case "${i%%=*}" in
+					*'.'*)
+						true
+					;;
+					*)
+						export "${i%%=*}=${i#*=}"
+					;;
+				esac
 			;;
-			sshd_port\=*)
-				sshd_port=$(get_opt $i)
+			*.*)
+				# ignore foo.bar
+				true
 			;;
-			binit_net_if\=*)
-				binit_net_if=$(get_opt $i)
-			;;
-			binit_net_addr\=*)
-				binit_net_addr=$(get_opt $i)
-			;;
-			binit_net_gw\=*)
-				binit_net_gw=$(get_opt $i)
-			;;
-			rootdelay\=*)
-				rootdelay=$(get_opt $i)
-			;;
-			console\=*)
-				console=$(get_opt $i)
-				console="${console%,*}"
-			;;
-			mdev)
-				mdev=true
-			;;
-			luks_no_discards)
-				luks_no_discards=true
-			;;
-			bcache)
-				bcache=true
-			;;
+			*)
+				# Everything that is not foo=bar should be just exported as 'true'
+				export "${i}=true"
+			:;
 		esac
 	done
 }
 
 use() {
-	name="$(eval echo \$$1)"
+	eval "name=\"\$$1\""
 	# Check if $name isn't empty and if $name isn't set to false or zero.
 	if [ -n "${name}" ] && [ "${name}" != 'false' ] && [ "${name}" != '0' ]; then
 		if [ -n "$2" ]; then
@@ -248,13 +244,13 @@ get_majorminor() {
 }
 
 InitializeLUKS() {
-	if [ ! -f /bin/cryptsetup ]; then
+	if ! command -v cryptsetup 1>/dev/null 2>&1; then
 		eerror "There is no cryptsetup binary into initramfs image."
 		rescueshell
 	fi
 
 	musthave enc_root
-
+	
 	local enc_num='1'
 	local dev_name="enc_root"
 	# We will use : to separate devices but we need normal IFS inside the for loop anyway.
@@ -322,17 +318,8 @@ SwsuspResume() {
 	if [ -f '/sys/power/resume' ]; then
 		local resume_majorminor="$(get_majorminor "${resume}")"
 		musthave resume_majorminor
+		einfo 'Sending resume device to /sys/power/resume ...'
 		echo "${resume_majorminor}" > /sys/power/resume
-	else
-		ewarn "Apparently this kernel does not support suspend."
-	fi
-}
-
-UswsuspResume() {
-	musthave resume
-	resolve_device resume
-	if [ -f '/sys/power/resume' ]; then
-		run resume --resume_device "${resume}"
 	else
 		ewarn "Apparently this kernel does not support suspend."
 	fi
@@ -369,6 +356,15 @@ SetupNetwork() {
 	# Defaults ...
 	vlan='false'
 
+	# backward compatibility
+	if [ "${sshd_interface}" ]; then
+		ewarn "sshd_interface is deprecated, check README"
+		ewarn "and switch to binit_net_if!"
+		binit_net_if="${sshd_interface}"
+		binit_net_addr="${sshd_ipv4}"
+		binit_net_gw="${sshd_ipv4_gateway}"
+	fi
+
 	# setting _interface is the trigger.
 	# after dropping backward compatibility there should be
 	# a 'use FOO && SetupNetwork' in init script.
@@ -392,8 +388,30 @@ SetupNetwork() {
 
 	einfo "Bringing up ${binit_net_if} interface ..."
 	run ip link set up dev "${binit_net_if}"
+
+	if [ "${binit_net_addr}" = 'dhcp' ]; then
+		einfo "Using DHCP on ${binit_net_if} ..."
+		if ! run --non-zero-ok udhcpc -i "${binit_net_if}" -s /bin/binit-udhcpc-script -q -f -n; then
+			einfo "Falling back to link local on ${binit_net_if} ..."
+			run zcip -f -q "${binit_net_if}" /bin/binit-zcip-script
+		fi
+
+		. /binit-dhcp-results
+	fi
+
 	einfo "Setting ${binit_net_addr} on ${binit_net_if} ..."
-	run ip addr add "${binit_net_addr}" dev "${binit_net_if}"
+	if [ "${binit_net_scope}" = 'local' ]; then
+		run ip addr add scope link local "${binit_net_addr}" dev "${binit_net_if}" broadcast +
+	else
+		run ip addr add "${binit_net_addr}" dev "${binit_net_if}"
+	fi
+
+	if [ -n "${binit_net_routes}" ]; then
+		for route in ${binit_net_routes}; do
+			einfo "Adding additional route '${route}' ..."
+			run ip route add "${route}" dev "${binit_net_if}"
+		done
+	fi
 
 	if [ -n "${binit_net_gw}" ]; then
 		einfo "Setting default routing via '${binit_net_gw}' ..."
@@ -414,6 +432,8 @@ setup_sshd() {
 	einfo "Generating dropbear ssh host keys ..."
 	test -f /etc/dropbear/dropbear_rsa_host_key || \
 		run dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key > /dev/null
+	test -f /etc/dropbear/dropbear_ecdsa_host_key || \
+		run dropbearkey -t ecdsa -f /etc/dropbear/dropbear_ecdsa_host_key > /dev/null
 	test -f /etc/dropbear/dropbear_dss_host_key || \
 		run dropbearkey -t dss -f /etc/dropbear/dropbear_dss_host_key > /dev/null
 
@@ -491,19 +511,20 @@ boot_newroot() {
 
 emount() {
 	# All mounts into one place is good idea.
+	local mountparams
 	while [ "$#" -gt 0 ]; do
 		case $1 in
 			'/newroot')
 				if mountpoint -q '/newroot'; then
 					einfo "/newroot already mounted, skipping..."
-				else
+				else	
 					einfo "Mounting /newroot..."
 					musthave root
-					if [ -n "${rootfstype}" ]; then
-						local mountparams="${rootfsmountparams} -t ${rootfstype}"
+					if [ -n "${rootfstype}" ]; then 
+						mountparams="${mountparams} -t ${rootfstype}"
 					fi
 					resolve_device root
-					run mount -o ${root_rw_ro:-ro} ${mountparams} "${root}" '/newroot'
+					run mount -o "${rootflags:+${rootflags},}${root_rw_ro:-ro}" ${mountparams} "${root}" '/newroot'
 				fi
 			;;
 
@@ -525,7 +546,7 @@ emount() {
 					ewarn "Early mouting of /usr will not be done."
 				fi
 			;;
-
+	
 			'/dev')
 				local devmountopts='nosuid,relatime,size=10240k,mode=755'
 
@@ -538,7 +559,7 @@ emount() {
 					run touch /etc/mdev.conf
 					run echo /sbin/mdev > /proc/sys/kernel/hotplug
 					run mdev -s
-					# Looks like mdev create /dev/pktcdvd as a file when both udev and devtmpfs do it as a dir.
+					# Looks like mdev create /dev/pktcdvd as a file when both udev and devtmpfs do it as a dir. 
 					# We will do it 'better' to avoid non-fatal-error while starting udev after switching to /newroot.
 					# TODO: Can mdev.conf handle it?
 					if [ -c '/dev/pktcdvd' ]; then
@@ -577,7 +598,7 @@ eumount() {
 		esac
 		shift
 	done
-}
+}	
 
 moveDev() {
 	einfo "Moving /dev to /newroot/dev..."
